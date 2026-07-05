@@ -6,6 +6,8 @@
   <title>셀공 메이트: 시간의 지배자</title>
   <!-- Tailwind CSS CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Tesseract.js CDN for client-side OCR -->
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
   <!-- Google Fonts: Premium Readable & Accent Sans-Serif -->
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=Orbitron:wght@700;900&family=Noto+Sans+KR:wght@300;400;500;700;900&display=swap" rel="stylesheet">
   <style>
@@ -936,6 +938,40 @@
                       class="w-full bg-cyan-600 hover:bg-cyan-500 text-white font-bold py-2 rounded text-xs retro-font tracking-wide transition-colors">
                 시험 점수 기록 업데이트
               </button>
+            </div>
+
+            <!-- OCR Grade Scanner Section -->
+            <div class="bg-cyan-950/40 border border-cyan-500/30 rounded-lg p-3 space-y-2 text-xs">
+              <span class="text-cyan-400 font-bold retro-font flex items-center gap-1">
+                <span>📸</span> AI 성적표 OCR 자동 입력 (실험실)
+              </span>
+              <p class="text-[10px] text-gray-400 leading-relaxed">성적표 사진을 업로드하면 자동으로 시험 점수를 분석하여 입력 필드에 채워줍니다.</p>
+              
+              <div class="flex items-center gap-2">
+                <input type="file" id="ocr-file-input" accept="image/*" class="hidden" onchange="handleOCRFileChange(event)">
+                <button onclick="document.getElementById('ocr-file-input').click()"
+                        class="flex-1 bg-black/60 hover:bg-cyan-950/40 border border-cyan-500/50 text-cyan-300 py-2 px-3 rounded flex items-center justify-center gap-1.5 transition-all text-center">
+                  <span>📁 이미지 선택</span>
+                </button>
+                <button id="btn-run-ocr" disabled onclick="runOCRScan()"
+                        class="flex-1 bg-gray-800 text-gray-500 py-2 px-3 rounded flex items-center justify-center gap-1.5 transition-all font-bold cursor-not-allowed text-center">
+                  <span>⚡ 스캔 시작</span>
+                </button>
+              </div>
+
+              <!-- OCR Status / Progress indicator -->
+              <div id="ocr-status-box" class="hidden space-y-1.5 pt-1">
+                <div class="flex justify-between text-[10px] font-bold text-cyan-300">
+                  <span id="ocr-status-text">분석 준비 중...</span>
+                  <span id="ocr-progress-label">0%</span>
+                </div>
+                <div class="w-full bg-gray-800 h-1.5 rounded-full overflow-hidden border border-cyan-500/20">
+                  <div id="ocr-progress-bar" class="bg-cyan-400 h-full w-0 transition-all duration-300"></div>
+                </div>
+              </div>
+              
+              <!-- Selected File name indicator -->
+              <div id="ocr-selected-file" class="hidden text-[10px] text-gray-400 italic font-mono truncate"></div>
             </div>
 
             <!-- Dynamic Correlation Text Summary -->
@@ -3031,6 +3067,155 @@ speechRecognitionEngine.onresult = (event) => {
       drawScatterPlot();
       
       alert('성적 분석 기록이 업데이트되었습니다!');
+    }
+
+    // --- AI OCR GRADE SCANNER MODULE ---
+    let selectedOCRFile = null;
+
+    function handleOCRFileChange(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      selectedOCRFile = file;
+
+      const fileLabel = document.getElementById('ocr-selected-file');
+      fileLabel.textContent = `선택된 파일: ${file.name}`;
+      fileLabel.classList.remove('hidden');
+
+      const runBtn = document.getElementById('btn-run-ocr');
+      runBtn.removeAttribute('disabled');
+      runBtn.className = "flex-1 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white py-2 px-3 rounded flex items-center justify-center gap-1.5 transition-all font-bold shadow-[0_0_10px_rgba(0,240,255,0.3)] cursor-pointer text-center";
+    }
+
+    function runOCRScan() {
+      if (!selectedOCRFile) return;
+
+      const statusBox = document.getElementById('ocr-status-box');
+      const statusText = document.getElementById('ocr-status-text');
+      const progressLabel = document.getElementById('ocr-progress-label');
+      const progressBar = document.getElementById('ocr-progress-bar');
+
+      statusBox.classList.remove('hidden');
+      statusText.textContent = "OCR 라이브러리 로딩 중...";
+      progressLabel.textContent = "0%";
+      progressBar.style.width = "0%";
+
+      // Create Tesseract Worker and recognize text
+      Tesseract.recognize(
+        selectedOCRFile,
+        'kor+eng', // Scan both Korean and English
+        {
+          logger: m => {
+            if (m.status === 'recognizing text') {
+              const progress = Math.floor(m.progress * 100);
+              statusText.textContent = "글자 인식 및 분석 중...";
+              progressLabel.textContent = `${progress}%`;
+              progressBar.style.width = `${progress}%`;
+            } else {
+              statusText.textContent = "엔진 준비 중...";
+            }
+          }
+        }
+      ).then(({ data: { text } }) => {
+        statusText.textContent = "스캔 완료! 점수 파싱 중...";
+        progressLabel.textContent = "100%";
+        progressBar.style.width = "100%";
+
+        console.log("OCR Recognized Text:\n", text);
+
+        // Parse grades
+        parseAndFillGrades(text);
+
+        setTimeout(() => {
+          statusBox.classList.add('hidden');
+        }, 3000);
+      }).catch(err => {
+        console.error("OCR Error:", err);
+        statusText.textContent = "에러 발생: " + err.message;
+        alert("OCR 글자 인식 중 에러가 발생했습니다. 라이브러리 CDN 로드 상태를 확인해 주세요.");
+      });
+    }
+
+    function parseAndFillGrades(text) {
+      const lines = text.split('\n');
+
+      const subjectsMap = {
+        math: ['수학', '수 학', '수학과'],
+        english: ['영어', '영 어', '외국어', '영어과'],
+        korean: ['국어', '국 어', '언어', '국어과'],
+        science: ['과학', '과 학', '물리', '화학', '생물', '지학', '과학기술'],
+        social: ['사회', '사 회', '역사', '지리', '도덕', '윤리', '사회탐구']
+      };
+
+      const foundScores = {};
+
+      lines.forEach(line => {
+        const cleanLine = line.replace(/\s+/g, ' ');
+
+        for (let subj in subjectsMap) {
+          const keywords = subjectsMap[subj];
+          let matchesKeyword = false;
+          keywords.forEach(keyword => {
+            if (cleanLine.includes(keyword)) {
+              matchesKeyword = true;
+            }
+          });
+
+          if (matchesKeyword) {
+            const numbers = cleanLine.match(/\b(100|[1-9]?[0-9])\b/g);
+            if (numbers && numbers.length > 0) {
+              const validScores = numbers.map(Number).filter(n => n >= 0 && n <= 100);
+              if (validScores.length > 0) {
+                let regexMatchFound = false;
+                for (let kw of keywords) {
+                  const regex = new RegExp(kw + '\\s*[:：\\s]*\\s*(\\b(100|[1-9]?[0-9])\\b)', 'i');
+                  const match = cleanLine.match(regex);
+                  if (match) {
+                    foundScores[subj] = parseInt(match[1]);
+                    regexMatchFound = true;
+                    break;
+                  }
+                }
+                if (!regexMatchFound && foundScores[subj] === undefined) {
+                  foundScores[subj] = validScores[0];
+                }
+              }
+            }
+          }
+        }
+      });
+
+      const foundKeys = Object.keys(foundScores);
+      if (foundKeys.length > 0) {
+        let alertMsg = "✨ 성적표 분석 성공! 아래 성적들이 인식되었습니다:\n\n";
+        foundKeys.forEach(subj => {
+          const krName = { math: '수학', english: '영어', korean: '국어', science: '과학', social: '사회' }[subj];
+          alertMsg += `- ${krName}: ${foundScores[subj]}점\n`;
+
+          if (!gradesData[currentSelectedSemester]) {
+            gradesData[currentSelectedSemester] = {};
+          }
+
+          if (!gradesData[currentSelectedSemester][subj]) {
+            gradesData[currentSelectedSemester][subj] = { target: 90, actual: foundScores[subj], hours: 15 };
+          } else {
+            gradesData[currentSelectedSemester][subj].actual = foundScores[subj];
+          }
+        });
+
+        const currentSubject = document.getElementById('grade-subject').value;
+        if (foundScores[currentSubject] !== undefined) {
+          document.getElementById('grade-actual-score').value = foundScores[currentSubject];
+        }
+
+        alertMsg += "\n(과목별 획득 점수가 대시보드에 즉시 반영되었습니다. '시험 점수 기록 업데이트'를 누르면 최종 저장됩니다.)";
+        alert(alertMsg);
+
+        updateGradeAnalysisText();
+        drawScatterPlot();
+      } else {
+        alert("⚠️ 성적표 이미지에서 과목이나 점수 패턴을 인식하지 못했습니다.\n과목명(수학, 영어, 국어 등)과 점수가 텍스트로 또렷하게 보이는 이미지인지 확인해 주세요.");
+      }
     }
 
     function updateGradeAnalysisText() {
